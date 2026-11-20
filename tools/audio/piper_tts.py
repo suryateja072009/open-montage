@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -96,6 +98,9 @@ class PiperTTS(BaseTool):
     user_visible_verification = ["Listen to generated audio for intelligibility"]
 
     def get_status(self) -> ToolStatus:
+        venv_scripts = str(Path(sys.executable).parent)
+        if venv_scripts not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = venv_scripts + os.pathsep + os.environ.get("PATH", "")
         if shutil.which("piper"):
             return ToolStatus.AVAILABLE
         return ToolStatus.UNAVAILABLE
@@ -116,14 +121,33 @@ class PiperTTS(BaseTool):
         result.duration_seconds = round(time.time() - start, 2)
         return result
 
+    def _resolve_model_path(self, model_name: str) -> str:
+        # If it's already a valid path
+        if Path(model_name).is_file():
+            return str(Path(model_name).resolve())
+        # Try finding .onnx file in known locations
+        candidates = [
+            Path(f"{model_name}.onnx"),
+            Path(__file__).parents[2] / f"{model_name}.onnx",
+            Path.home() / ".piper" / "models" / f"{model_name}.onnx",
+        ]
+        for c in candidates:
+            if c.is_file():
+                return str(c.resolve())
+        return model_name
+
     def _generate(self, inputs: dict[str, Any]) -> ToolResult:
         output_path = Path(inputs.get("output_path", "tts_output.wav"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        piper_bin = shutil.which("piper") or "piper"
+        raw_model = inputs.get("model", "en_US-lessac-medium")
+        resolved_model = self._resolve_model_path(raw_model)
+
         proc = subprocess.run(
             [
-                "piper",
-                "--model", inputs.get("model", "en_US-lessac-medium"),
+                piper_bin,
+                "--model", resolved_model,
                 "--speaker", str(inputs.get("speaker_id", 0)),
                 "--length-scale", str(inputs.get("length_scale", 1.0)),
                 "--sentence-silence", str(inputs.get("sentence_silence", 0.3)),
